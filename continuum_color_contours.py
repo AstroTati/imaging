@@ -9,7 +9,8 @@ Created on Fri May 12 13:26:56 2023
 This script is to plot a radio continuum image using VLA data.
 It will run only if you have 2 axis (check drop2axis.py)
 
-
+Inputs:
+    - Fits file (x2)
 I will plot one data set in contours (data_1) and one data set in both contours (data_2). 
 The data have different angular resolution, the latter having a smaller beam size. 
 ===
