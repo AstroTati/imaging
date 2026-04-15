@@ -1,120 +1,71 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Jan 27 08:29:01 2022
+ONE MAY NEED TO HAVE ONLY 2 AXIS IN THEIR FITS
+FILE TO USE AT LEAST SOME ASTROPY PACKAGES.
+THIS SCRIPT GETS RID OF 2 AXIS IN VLA DATA HEADER.
 
+YOU CAN EITHER GIVE IT ONLY 1 FILE OR A PATH AND 
+RUN FOR ALL FILES INSIDE A DIRECTORY.
+
+INPUT:
+    - original fits file or path to files.
+OUTPUT
+    - fits file(s) w/ only 2 axis.
+
+
+Created on Thu Jan 27 08:29:01 2022
 @author: trodriguez
 """
+
 import astropy
 from astropy.coordinates import Angle
 from astropy.io import fits
 from astropy.utils.data import get_pkg_data_filename
 from astropy.wcs import WCS
+import os
 
+def drop2axis(filename, outname, zeroes=False):
+    fmt = "PC{:02d}_{:02d}" if zeroes else "PC{}_{}"
+    # In older header versions there are zeroes. You can check your header and check if
+    # zeroes should be true or false.
 
-def drop2axis(filename, outname):
-    hdu = astropy.io.fits.open(filename)[0]
-    try:    
-        for kw in 'CTYPE', 'CRVAL','CRPIX','CDELT', 'CUNIT','NAXIS':
-            for n in 3,4:
-                hdu.header.remove(f"{kw}{n}")
-        for kw in 'PC3_1','PC3_2','PC3_3','PC3_4','PC4_1','PC4_2','PC4_3','PC4_4',:
-            hdu.header.remove(f"{kw}")
-        for kw in 'PC1_3','PC1_4','PC2_3','PC2_4':
-            hdu.header.remove(f"{kw}")
-        astropy.io.fits.writeto(outname, hdu.data[0,0], hdu.header,overwrite=True)
-    except KeyError:
-        pass
+    with astropy.io.fits.open(filename) as hdul:
+        hdu = hdul[0]
+        header = hdu.header.copy()
 
-def drop2axis_wzeroes(filename, outname):
-    hdu = astropy.io.fits.open(filename)[0]
-    try:
-        for kw in 'CTYPE', 'CRVAL','CRPIX','CDELT', 'CUNIT','NAXIS':
-            for n in 3,4:
-                hdu.header.remove(f"{kw}{n}")
-        for kw in 'PC03_01','PC03_02','PC03_03','PC03_04','PC04_01','PC04_02','PC04_03','PC04_04',:
-            hdu.header.remove(f"{kw}")
-        for kw in 'PC01_03','PC01_04','PC02_03','PC02_04':
-            hdu.header.remove(f"{kw}")
-        astropy.io.fits.writeto(outname, hdu.data[0,0], hdu.header,overwrite=True)
-    except KeyError:
-        pass
+        keywords = (
+            [f"{kw}{n}" for kw in ('CTYPE','CRVAL','CRPIX','CDELT','CUNIT','NAXIS') for n in (3, 4)]
+            + [fmt.format(i, j) for i in (3, 4) for j in (1, 2, 3, 4)]
+            + [fmt.format(i, j) for i in (1, 2) for j in (3, 4)]
+        )
 
+        for kw in keywords:
+            header.remove(kw, ignore_missing=True)
 
-# def drop2axis_wzeroes(filename, outname):
-    # hdu = astropy.io.fits.open(filename)[0]
-    # for kw in 'CTYPE', 'CRVAL','CRPIX','CDELT', 'CUNIT','NAXIS':
-    #     for n in 3,4:
-    #         hdu.header.remove(f"{kw}{n}")
-    # for kw in 'PC003001','PC003003','PC003004','PC004001','PC004002','PC004003','PC004004':
-    #     hdu.header.remove(f"{kw}")
-    # for kw in 'PC001003','PC001004','PC002003','PC002004':
-    #     hdu.header.remove(f"{kw}")
-    # for kw in 'PC003002','PC001003':
-    #     hdu.header.remove(f"{kw}")
-    # astropy.io.fits.writeto(outname, hdu.data[0,0], hdu.header,overwrite=True)
-    # except KeyError:
-    #     print('error!',KeyError)
-    #     pass
-   
-    # 'PC00302',
-    
+        astropy.io.fits.writeto(outname, hdu.data[0, 0], header, overwrite=True)
 
 def load(filename):
     file = get_pkg_data_filename(filename)
     hdu = fits.open(file)[0]
-    # print(hdu.header)
+    # print(hdu.header) # for checks
     data = hdu.data
     wcs = WCS(hdu.header)
     
     return(data, wcs, hdu)
 
-
-import os
-files_path = '/home/tatush/Desktop/Projects/VLA-G023'
+####### INPUTS AND RUN
+files_path = '/path/to/fits_files'
 
 for filename in os.listdir(files_path):
-    if filename.endswith("wmask.fits"):
+    if filename.endswith(".fits"):
         file = "{}/{}".format(files_path,filename)
-        drop2axis_wzeroes(file,file)
-        drop2axis(file,file)
-        print(file)
-    
-    
-# drop2axis_wzeroes('/home/tatush/Desktop/VLA22A092/Final_cont_fits/18151_rosC.fits',
-            # '/home/tatush/Desktop/VLA22A092/Final_cont_fits/18151_rosC.fits')
+        drop2axis(file,file,zeroes = False)   # This is because I want it to overwrite. 
+                                            # One could also define a file_output name ofc.
 
-# load('/home/trodriguez/Desktop/pyscripts+txt/VLA22A-092/fits_files/19035Cband-Aarray-full.fits')
-
-
-
-# 18470_rosK.fits
-# 18151_rosC.fits
-# 18182_rosC.fits
-# 18566_rosC.fits
-# 19012_rosC.fits
-
-
-# import numpy
-# import pyfits
-
-# filename = '/home/tatush/Desktop/VLA22A092/Final_cont_fits/18151_rosC.fits'
-# outfile  = '/home/tatush/Desktop/VLA22A092/Final_cont_fits/18151_rosC_test.fits'
-
-# # Get the shape of the file
-# fitsfile=pyfits.open(filename)
-# image = fitsfile[0].data
-# header =fitsfile[0].header
-# z = image.shape[0]  # No. channels                  
-# y = image.shape[1]  # No. x pixels
-# # x = image.shape[3]  # No. y pixels
-
-# newimage = numpy.reshape(image,[z,y])
-
-# pyfits.core.writeto(outfile,newimage,header, clobber=True)
-
-
-
+### another option: a single file
+# file = '/path/to/file.fits'
+# drop2axis(file,file, zeroes = False)
 
 
 
