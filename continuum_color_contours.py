@@ -1,184 +1,296 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri May 12 13:26:56 2023
+Tatiana M. Rodriguez
 
-@author: tatush
+==================================================================
+plot_radio_continuum.py
+==================================================================
+Plot a VLA radio continuum image with two datasets:
+  - data_1: rendered as a color map (imshow)
+  - data_2: overlaid as contours at multiples of the rms noise
 
-=== 
-This script is to plot a radio continuum image using VLA data.
-It will run only if you have 2 axis (check drop2axis.py)
+Requirements: 
+    2-axis FITS files (see drop2axis.py if needed).
 
-Inputs:
-    - Fits file (x2)
-I will plot one data set in contours (data_1) and one data set in both contours (data_2). 
-The data have different angular resolution, the latter having a smaller beam size. 
-===
+Usage example:
+    python plot_radio_continuum.py --file1 continuum_color.fits \
+                                   --file2 continuum_contours.fits \
+                                   [options]
 
+Run 'python plot_radio_continuum.py --help' for all options.
+
+Note:
+    I created this script and used genAI to generalize, comment, 
+    & optimize it. I tested it on my data but let me know if you
+    encounter any issues. :)
+    
 """
 
-from astropy.wcs import WCS
-import astropy
-from astropy.io import fits
-from astropy.coordinates import Angle
-from astropy.utils.data import get_pkg_data_filename
-import numpy as np
-from matplotlib.patches import Ellipse
-import matplotlib.pyplot as plt
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-from astropy.nddata import Cutout2D
-from matplotlib.colors import LogNorm
-from matplotlib.ticker import MultipleLocator
-
-## I don't like warnings :3
+import argparse
 import warnings
+from pathlib import Path
+
+import astropy.units as u
+import matplotlib.pyplot as plt
+import numpy as np
+from astropy.coordinates import Angle, SkyCoord
+from astropy.io import fits
+from astropy.nddata import Cutout2D
+from astropy.wcs import WCS
+from matplotlib.patches import Ellipse
+
 warnings.filterwarnings("ignore")
 
-## ====================================================================
-## ===================FUNCTION DEFINITION==============================
 
-## load function
-def load(filename):
-    file = get_pkg_data_filename(filename)
-    hdu = fits.open(file)[0]
-    data = hdu.data
-    wcs = WCS(hdu.header)
-    
-    return(data, wcs, hdu)
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def load_fits(path: str):
+    """Return (data, WCS, primary HDU) for a FITS file."""
+    hdu = fits.open(path)[0]
+    return hdu.data, WCS(hdu.header), hdu
 
 
-def find_center_and_scale(hdr):
-    obsra, obsdec = hdr["OBSRA"], hdr["OBSDEC"]
-    scale_ra, scale_dec = hdr["CDELT1"], hdr["CDELT2"] # deg/pixel
-    npxl_ra, npxl_dec = hdr["NAXIS1"], hdr["NAXIS2"]     
-    
-    return obsra, obsdec, scale_ra, scale_dec, npxl_ra, npxl_dec  # in deg
+def cutout(data, wcs, hdu, center_pix: tuple, box_pix: tuple):
+    """
+    Trim data to a rectangular region.
 
-def cut(data, wcs, hdu, center, box):
-    ### I want to plot only a small area around my source, not the whole image.
-    size = u.Quantity(box, u.pix) # units could be also pixels
-    cutout = Cutout2D(data,position=center,size=size,wcs=wcs)
-    hdu.header.update(cutout.wcs.to_header())
-    hdu.data = cutout.data
-    wcs_cut = WCS(hdu.header)
-    
-    return(hdu.data,wcs_cut,hdu)
-
-def find_beam(hdr):
-    ### Finds the beam info in the header
-    major = hdr["BMAJ"] # in degrees from VLA
-    minor = hdr["BMIN"]
-    pa = hdr["BPA"] # position angle in degrees from VLA
-    
-    return (major_data_2 minor_data_2, pa)
-
-## ====================================================================
-## ======================DATA DEFINITION===============================
-
-file_1 = '/the-path/continuum_contours.fits' ## I will use only the contours of these data
-data_1 , wcs_1 , hdu_1 = load(file_1)
-data_1 = np.ma.masked_invalid(data_1) # Mask blanks/NaN
-data_1_deg = SkyCoord(286.5067083333333,6.776722222222222, frame='fk5', unit='deg')
-data_1_pix = wcs_1.world_to_pixel(data_1_deg)
-# print(data_1_pix) # check
-data_1 , wcs_1 , hdu_1 = cut(data_1 , wcs_1 , hdu_1, (1048,1224), box=(55,55))  ## This is the center of the area I want to plot
-                                                                                ## It is not necessary the center of the image,  
-                                                                                ## hence I give it the precise pixel. Box size in pix.
+    Parameters
+    ----------
+    center_pix : (x, y) pixel coordinates of the cutout centre.
+    box_pix    : (nx, ny) cutout size in pixels.
+    """
+    size = u.Quantity(box_pix, u.pix)
+    cut = Cutout2D(data, position=center_pix, size=size, wcs=wcs)
+    hdu.header.update(cut.wcs.to_header())
+    hdu.data = cut.data
+    return cut.data, WCS(hdu.header), hdu
 
 
-data_2 , wcs_2 , hdu_2 = load('/the-path/continuum_image_color.fits')
-data_2 = np.ma.masked_invalid(data_2) # Mask blanks/NaN
-rms=data_2.std()
-center_deg = SkyCoord(286.5067083333333,6.776722222222222, frame='fk5', unit='deg')
-center_pix = wcs_2.world_to_pixel(center_deg)
-# print(center_pix)
-data_2 , wcs_2 , hdu_2 = cut(data_2 , wcs_2 , hdu_2, center=(935,1020),box=(300,300))
+# ---------------------------------------------------------------------------
+# Header parsers
+# ---------------------------------------------------------------------------
+
+def get_beam(hdr) -> tuple:
+    """Return (major, minor, pa) beam parameters in degrees."""
+    return hdr["BMAJ"], hdr["BMIN"], hdr["BPA"]
 
 
-## ====================================================================
-## ======================PLOTTING======================================
-
-fig = plt.figure(figsize=(15,15))
-ax = fig.add_axes([0.1, 0.1, 0.8, 0.8], projection=wcs_1) # The lower res data determines the wcs
-    
-
-## axis label and ticks
-ra = ax.coords[0]
-dec = ax.coords[1]
-ra.set_axislabel("RA (J2000)", minpad=0.8, fontsize=25)
-dec.set_axislabel("Dec (J2000)", minpad=-1.0, fontsize=25)
-ra.set_major_formatter('hh:mm:ss.ss')
-ax.set_title('source name',fontsize=25)
-# I'll plot only 40 pixels
-ax.set_xlim(7,47)
-ax.set_ylim(5,45)
-    
-
-ra.display_minor_ticks(True)
-dec.display_minor_ticks(True)    
-ax.tick_params(which='both',direction='in',color='white',length=10,width=2, labelsize=20)
-ax.tick_params(which='minor', length=5)
-
-## Color plot
-im=ax.imshow(data_1, vmin=-1e-7, vmax=data_1.max(), origin='lower', cmap='plasma', transform=ax.get_transform(wcs_1))
-
-## Color bar
-cbar = fig.colorbar(im,shrink=0.8)
-for t in cbar.ax.get_yticklabels():
-    t.set_fontsize(18)
-cbar.ax.set_ylabel(r'$\mu$Jy/beam', fontsize=20)
-cbar.ax.set_yticklabels(['0','50','100','150','200','250','300','350','400'])
-
-## Contour plot
-plt.rcParams["lines.linewidth"] = 2
-levels = [rms*-3,rms*3,rms*5,rms*10,rms*15]      
-ax.contour(data_2, levels=levels, colors='k', transform=ax.get_transform(wcs_2))
+def get_pixel_scale(hdr) -> tuple:
+    """Return (CDELT1, CDELT2) pixel scales in deg/pixel."""
+    return hdr["CDELT1"], hdr["CDELT2"]
 
 
+# ---------------------------------------------------------------------------
+# Plotting helpers
+# ---------------------------------------------------------------------------
 
-## Scale bar
-d = 2.3 # kpc
-sb_length = (500) /(d * 1000)     # I want a 500 au scale bar
-pix_scale = 0.05                  # pixel size
-bsize = sb_length / pix_scale     # size of bar in pix
+def add_beam(ax, wcs_ref, beam_coord_deg: tuple, major: float, minor: float,
+             pa: float, **ellipse_kwargs):
+    """
+    Overlay a beam ellipse on *ax*.
 
-xlim1, xlim2 = ax.get_xlim()
-ylim1, ylim2 = ax.get_ylim()
-
-aux = (xlim2-2-bsize+xlim2-2)/2.
-ax.plot([xlim2-2-bsize,xlim2-2], [ylim2-1,ylim2-1], linewidth=3, c='w', alpha=1.0)
-
-scale_bar_fontsize=16
-scale_bar_text = '500 au'
-
-ax.text(aux, ylim2-2.5, scale_bar_text, fontsize=22, horizontalalignment='center', color='w')
-
-## Plot beam
-obsra, obsdec, scale_ra, scale_dec, npxl_ra, npxl_dec = find_center_and_scale(hdu_1.header)
-major_data_2, minor_data_2, pa_data_2 = find_beam(hdu_2.header)
-
-plt.rcParams["hatch.linewidth"] = 3
-obsra, obsdec, scale_ra, scale_dec, npxl_ra, npxl_dec = find_center_and_scale(hdu_1.header)
-major_data_2, minor_data_2, pa = find_beam(hdu_2.header)
-# beam_ra  = obsra  - 1 *scale_ra*npxl_ra + major_data_2
-# beam_dec = obsdec - 1 *scale_dec*npxl_dec + major_data_2
-# I was having issues with the method above so I forced the beam position manually.
-beam_ra = Angle('19h06m01.663s').deg
-beam_dec = Angle('6d46m35.35s').deg
-
-major_data_1, minor_data_1, PA_data_1 = find_beam(hdu_1.header)
-beam_data_1 = Ellipse((beam_ra, beam_dec), major_data_1, minor_data_1, 90.0-PA_data_1, # BPA relative pos
-                    transform=ax.get_transform('fk5'),
-                    edgecolor='w', facecolor='none',lw=3)
-ax.add_patch(beam_data_1)
-
-beam_data_2 = Ellipse((beam_ra, beam_dec), major_data_2, minor_data_2, 90.0-pa_data_2, # BPA relative pos
-                    transform=ax.get_transform('fk5'),
-                    edgecolor='w', facecolor='w')
-ax.add_patch(beam_data_2)
+    Parameters
+    ----------
+    beam_coord_deg : (ra_deg, dec_deg) position of the ellipse centre.
+    major, minor   : beam axes in degrees.
+    pa             : beam position angle in degrees (BPA convention).
+    ellipse_kwargs : forwarded to matplotlib Ellipse.
+    """
+    ra, dec = beam_coord_deg
+    patch = Ellipse(
+        (ra, dec), major, minor,
+        angle=90.0 - pa,
+        transform=ax.get_transform("fk5"),
+        **ellipse_kwargs,
+    )
+    ax.add_patch(patch)
 
 
-## optional for saving plot
-# plot_name = 'plot_name.pdf' # or .png
-# plt.savefig(plot_name, bbox_inches='tight') 
+def add_scale_bar(ax, distance_kpc: float, bar_au: float, pix_scale_arcsec: float,
+                  color: str = "w", fontsize: int = 22):
+    """
+    Draw a physical scale bar in the upper-right corner.
+
+    Parameters
+    ----------
+    distance_kpc      : source distance in kpc.
+    bar_au            : desired bar length in au.
+    pix_scale_arcsec  : image pixel scale in arcsec/pixel.
+    """
+    bar_arcsec = bar_au / (distance_kpc * 1e3)          # angular size in arcsec
+    bar_pix = bar_arcsec / pix_scale_arcsec
+
+    x1, x2 = ax.get_xlim()
+    y1, y2 = ax.get_ylim()
+    xr, yr = x2 - 2, y2 - 1
+    ax.plot([xr - bar_pix, xr], [yr, yr], lw=3, color=color)
+    ax.text(
+        (xr - bar_pix + xr) / 2.0, yr - 1.5,
+        f"{bar_au:.0f} au",
+        fontsize=fontsize, ha="center", color=color,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Plot a VLA radio continuum image (colour + contours)."
+    )
+    p.add_argument("--file1", required=True,
+                   help="FITS file rendered as a colour image.")
+    p.add_argument("--file2", required=True,
+                   help="FITS file overlaid as contours.")
+
+    # Cutout centres and sizes
+    p.add_argument("--center1", nargs=2, type=int, default=[1048, 1224],
+                   metavar=("X", "Y"), help="Pixel centre for file1 cutout.")
+    p.add_argument("--box1", nargs=2, type=int, default=[55, 55],
+                   metavar=("NX", "NY"), help="Cutout box size for file1 (pixels).")
+    p.add_argument("--center2", nargs=2, type=int, default=[935, 1020],
+                   metavar=("X", "Y"), help="Pixel centre for file2 cutout.")
+    p.add_argument("--box2", nargs=2, type=int, default=[300, 300],
+                   metavar=("NX", "NY"), help="Cutout box size for file2 (pixels).")
+
+    # Plot window (pixels within the cutout)
+    p.add_argument("--xlim", nargs=2, type=float, default=[7, 47],
+                   metavar=("XMIN", "XMAX"))
+    p.add_argument("--ylim", nargs=2, type=float, default=[5, 45],
+                   metavar=("YMIN", "YMAX"))
+
+    # Colour scale
+    p.add_argument("--vmin", type=float, default=-1e-7,
+                   help="imshow vmin (Jy/beam).")
+
+    # Contour levels as multiples of rms
+    p.add_argument("--sigma-levels", nargs="+", type=float,
+                   default=[-3, 3, 5, 10, 15],
+                   help="Contour levels in units of image rms.")
+
+    # Scale bar
+    p.add_argument("--distance", type=float, default=2.3,
+                   help="Source distance in kpc.")
+    p.add_argument("--bar-au", type=float, default=500,
+                   help="Physical length of the scale bar in au.")
+    p.add_argument("--pix-scale", type=float, default=0.05,
+                   help="Pixel scale in arcsec/pixel.")
+
+    # Beam position (FK5, sexagesimal)
+    p.add_argument("--beam-ra", default="19h06m01.663s",
+                   help="RA of beam ellipse centre.")
+    p.add_argument("--beam-dec", default="6d46m35.35s",
+                   help="Dec of beam ellipse centre.")
+
+    # Labels
+    p.add_argument("--title", default="Source name", help="Plot title.")
+    p.add_argument("--cbar-unit", default=r"$\mu$Jy/beam",
+                   help="Colour-bar axis label.")
+
+    # Output
+    p.add_argument("--output", default=None,
+                   help="Save path (e.g. plot.pdf). Omit to display interactively.")
+
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # ------------------------------------------------------------------
+    # Load and trim data
+    # ------------------------------------------------------------------
+    data1, wcs1, hdu1 = load_fits(args.file1)
+    data1 = np.ma.masked_invalid(data1)
+    data1, wcs1, hdu1 = cutout(data1, wcs1, hdu1, args.center1, args.box1)
+
+    data2, wcs2, hdu2 = load_fits(args.file2)
+    data2 = np.ma.masked_invalid(data2)
+    rms = float(data2.std())
+    data2, wcs2, hdu2 = cutout(data2, wcs2, hdu2, args.center2, args.box2)
+
+    # ------------------------------------------------------------------
+    # Figure setup  — WCS of data1 (colour image) drives the projection
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=(15, 15))
+    ax = fig.add_axes([0.1, 0.1, 0.8, 0.8], projection=wcs1)
+
+    ra_ax = ax.coords[0]
+    dec_ax = ax.coords[1]
+    ra_ax.set_axislabel("RA (J2000)", minpad=0.8, fontsize=25)
+    dec_ax.set_axislabel("Dec (J2000)", minpad=-1.0, fontsize=25)
+    ra_ax.set_major_formatter("hh:mm:ss.ss")
+    ra_ax.display_minor_ticks(True)
+    dec_ax.display_minor_ticks(True)
+    ax.tick_params(which="both", direction="in", color="white",
+                   length=10, width=2, labelsize=20)
+    ax.tick_params(which="minor", length=5)
+    ax.set_title(args.title, fontsize=25)
+    ax.set_xlim(*args.xlim)
+    ax.set_ylim(*args.ylim)
+
+    # ------------------------------------------------------------------
+    # Colour image
+    # ------------------------------------------------------------------
+    im = ax.imshow(
+        data1, origin="lower", cmap="plasma",
+        vmin=args.vmin, vmax=float(data1.max()),
+        transform=ax.get_transform(wcs1),
+    )
+
+    cbar = fig.colorbar(im, shrink=0.8)
+    cbar.ax.set_ylabel(args.cbar_unit, fontsize=20)
+    for t in cbar.ax.get_yticklabels():
+        t.set_fontsize(18)
+
+    # ------------------------------------------------------------------
+    # Contours
+    # ------------------------------------------------------------------
+    levels = [rms * s for s in args.sigma_levels]
+    plt.rcParams["lines.linewidth"] = 2
+    ax.contour(
+        data2, levels=levels, colors="k",
+        transform=ax.get_transform(wcs2),
+    )
+
+    # ------------------------------------------------------------------
+    # Scale bar
+    # ------------------------------------------------------------------
+    add_scale_bar(
+        ax,
+        distance_kpc=args.distance,
+        bar_au=args.bar_au,
+        pix_scale_arcsec=args.pix_scale,
+    )
+
+    # ------------------------------------------------------------------
+    # Beam ellipses
+    # ------------------------------------------------------------------
+    beam_ra = Angle(args.beam_ra).deg
+    beam_dec = Angle(args.beam_dec).deg
+    beam_coord = (beam_ra, beam_dec)
+
+    maj1, min1, pa1 = get_beam(hdu1.header)
+    add_beam(ax, wcs1, beam_coord, maj1, min1, pa1,
+             edgecolor="w", facecolor="none", lw=3)
+
+    maj2, min2, pa2 = get_beam(hdu2.header)
+    plt.rcParams["hatch.linewidth"] = 3
+    add_beam(ax, wcs1, beam_coord, maj2, min2, pa2,
+             edgecolor="w", facecolor="w")
+
+    # ------------------------------------------------------------------
+    # Output
+    # ------------------------------------------------------------------
+    if args.output:
+        plt.savefig(args.output, bbox_inches="tight")
+        print(f"Saved → {args.output}")
+    else:
+        plt.show()
+
+
+if __name__ == "__main__":
+    main()
